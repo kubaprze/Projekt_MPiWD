@@ -1,0 +1,750 @@
+---
+title: "Projekt metody pozyskiwania i wizualizacji danych"
+author: "Jakub Przemski"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+toc: true
+execute: 
+  echo: false
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readr)
+library(anytime)
+library(knitr)
+library(gt)
+library(flextable)
+library(rstatix)
+library(scales)
+library(grid)
+library(gridExtra)
+library(plotly)
+library(quantmod)
+library(ggcorrplot)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Wczytanie danych
+Games <- read_csv2("data/all_games_cleaned.csv")
+Games$Genre <- factor(Games$Genre, levels = c("Indie","Action","Simulation","Strategy","RPG","Sports","MMO"))
+names(Games) <- c("Game","Year","Price","Metascore","Owners","avg_playtime", "Developer", "Publisher", "Genre")
+
+Games_joined <- read_csv2("data/Games_joined.csv")
+names(Games_joined) <- c("Game","Year","Price","Metascore","Owners","avg_playtime", "Developer", "Publisher", "Genre")
+
+Tags <- read_csv2("data/tags.csv")
+Devs <- read_csv2("data/devs.csv")
+names(Devs) <- c("Company", "Total_games","Published_games","Avg_owners1","Developed_games","Avg_owners2" )
+
+Polish <- read_csv2("data/polish.csv")
+Polish[is.na(Polish$`Release date`),]$`Release date` <- "Apr 20, 2020"
+Polish$`Release date` <- anytime(Polish$`Release date`)
+
+Games_month <- read_csv2("data/games_by_month.csv")
+Games_year <- read_csv2("data/games_by_year.csv")
+Games_year$Month <- Games_year$Month |> 
+  str_extract("[0-9]+") |> 
+  as.numeric()
+```
+
+## Wstęp
+
+### Cel projektu
+
+-   Celem projektu jest analiza rynku gier komputerowych na przestrzeni ostatnich 20 lat.
+
+### Dane
+
+Dane wykorzystywanie w projekcie składają się z kilku ramek danych:
+
+**Games** - zawierająca informacje o `r length(unique(Games$Game))` różnych grach dostępnych na platformie ![Steam](steam-logo.png){width="55"} . Składa się z kolumn:
+
+-   ***Game*** - Nazwa gry.
+-   ***Year*** - Rok publikacji gry.
+-   ***Price*** - Cena gry w dolarach amerykańskich.
+-   ***Metascore*** - Metascore (ocena gry)
+-   ***Owners*** - Szacowana ilość osób posiadających grę.
+-   ***Delveloper*** - Nazwa dewelopera (deweloperów).
+-   ***Publisher*** - Nazwa wydawcy (wydawców) gry.
+-   ***Genre*** - Gatunek gry.
+
+**Devs** - zawierająca informacje o poszczególnych deweloperach, składająca się z kolumn:
+
+-   ***Company*** - Nazwa dewelopera.
+-   ***Avg_owners*** - Średnia szacowana liczba posiadających gry danego dewelopera.
+-   ***Developed_games*** - Liczba stworzonych gier.
+
+Do dyspozycji mam również tabele zawierającą informacje o ilości wydanych tytułów w danym miesiacu oraz dane dotyczące tagów.
+
+Informacje zostały pozyskane ze strony [SteamSpy](https://steamspy.com)
+
+
+## Analiza
+
+```{r}
+
+### Korelacje
+
+num_variables <- Games_joined |> 
+  select(Price,Metascore,Owners,Year)
+corr <- cor_mat(num_variables)
+p_mat <- cor_pmat(num_variables)
+
+corr_plot <- ggcorrplot(corr, p.mat = p_mat,lab = T)+
+  labs(title = "Macierz korelacji")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#Nie widać żadnych korelacji między zmiennymi numerycznymi.
+```
+
+### Liczba gier
+
+```{r}
+# niewykorzystane
+games_year_plot <- Games_year |> 
+  ggplot(aes(x=Month, y = `Games this month`))+
+  geom_line()+
+  xlim(2004, 2023)
+```
+
+```{r}
+# simple line plot
+Games_month$Month <- as.Date(Games_month$Month)
+Games_month_plot <- Games_month |> 
+  ggplot(aes(x=Month, y = `Games this month`))+
+  geom_line(color = "blue")+
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year")+
+  xlab("")+
+  theme_bw()+
+  labs(title = "Liczba wydanych gier w latach 2004-2023 każdym miesiącu")+
+  theme(axis.text.x=element_text(angle=60, hjust=1), plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+
+
+df <- Games_month[,c(1,2)] |> 
+  arrange(Month)
+
+df$ID <- seq.int(nrow(df))
+
+accumulate_by <- function(dat, var) {
+  var <- lazyeval::f_eval(var, dat)
+  lvls <- plotly:::getLevels(var)
+  dats <- lapply(seq_along(lvls), function(x) {
+    cbind(dat[var %in% lvls[seq(1, x)], ], frame = lvls[[x]])
+  })
+  dplyr::bind_rows(dats)
+}
+
+vline <- function(x = 0, color = "blue") {
+  list(
+    type = "line",
+    y0 = 0,
+    y1 = 1,
+    yref = "paper",
+    x0 = x,
+    x1 = x,
+    line = list(color = color, dash="dot")
+  )
+}
+
+df <- df %>% accumulate_by(~ID)
+fig <- df %>% plot_ly(
+  x = ~ID, 
+  y = ~`Games this month`, 
+  frame = ~frame,
+  type = 'scatter', 
+  mode = 'lines', 
+  fill = 'tozeroy', 
+  fillcolor='rgba(114, 186, 59, 0.5)',
+  line = list(color = 'rgb(114, 186, 59)'),
+  text = ~paste("Data: ", Month, "<br>Liczba gier: ", `Games this month`), 
+  hoverinfo = 'text'
+)
+fig <- fig %>% layout(
+  title = "Liczba gier wydanych w latach 2004-2023 w każdym miesiącu",
+  yaxis = list(
+    title = "Liczba", 
+    range = c(0,1300), 
+    zeroline = F,
+    tickprefix = ""
+  ),
+  xaxis = list(
+    title = "Miesiąc", 
+    range = c(0,240), 
+    zeroline = F, 
+    showgrid = F
+  )
+  
+) 
+fig <- fig %>% animation_opts(
+  frame = 100, 
+  transition = 0, 
+  redraw = FALSE
+)
+fig <- fig %>% animation_slider(
+  currentvalue = list(
+    prefix = "Miesiąc "
+  )
+)
+
+fig
+```
+
+```{r}
+do_2013 <- Games_month[Games_month$Month < "2013-01-01",] 
+names(do_2013) <- c("Month" , "Games_this_month"       ,       "Average_userscore_(metascore)" ,"Median_playtime"       ,"Total_copies_owned"        ,    "Average_copies_owned"     ,     "Median_copies_owned"     ,      "Average_price"                ,"Median_price" )
+```
+
+Do 2013 roku liczba wydawanych gier nie była zbyt duża i utrzymywała się na mniej więcej stałym poziomie - średnio `r round(mean(do_2013$Games_this_month))` gier na miesiąc. Od roku 2013 widać tendencję wzrostową. Miesiącem z największą liczbą wydanych gier do tej pory jest październik 2023 roku, w którym powstało aż `1189` gier.
+
+```{r, fig.align='center' }
+liczebnosc_gatunki <- Games |> 
+  group_by(Genre) |> 
+  summarise(liczba = n()) |> 
+  ggplot(aes(x=Genre, y=liczba, fill = liczba))+
+  geom_col()+
+  ylim(0,60000)+
+  xlab("")+
+  ylab("")+
+  theme_light()+
+  labs(title = "Liczba gier w poszczególnych gatunkach")+
+  theme(plot.title = element_text(hjust = 0.5, colour = "black", face = "bold"),
+        legend.position = "none")+
+  
+  scale_fill_gradient(high = "#000990",low = "#2ACAEA")
+liczebnosc_gatunki
+```
+
+Zdecydowanie najwięcej gier jest z gatunku Indie czyli gier komputerowych, które zostały stworzone przez mały zespół lub jedną osobę bez finansowego wsparcia wydawcy gier. Gry niezależne często charakteryzują się innowacyjną rozgrywką i rozpowszechniane są za pomocą cyfrowej dystrybucji. Drugie z kolei są gry akcji, które wymagają koordynacji ruchów myszki z tym co dzieje się na ekranie oraz szybkiego czasu reakcji.
+
+```{r, warning=FALSE, message=FALSE}
+# nie wykorzystane
+Games_each_year <- Games |> 
+  group_by(Year, Genre) |> 
+  summarize(n()) |> 
+  na.omit()
+
+games_year_col <- Games |> 
+  group_by(Year) |> 
+  summarize(n()) |> 
+  ggplot(aes(x=Year, y = `n()`))+
+  geom_col(fill = "blue")+
+  xlim(2003,2023)
+```
+
+Czy każdy z gatunków zdobył popularność w tym samym momencie, czy może niektóre gatunki zaczęły powstawać później niż inne?
+
+```{r, message=FALSE, warning=FALSE}
+plot1 <- Games_each_year[Games_each_year$Genre == "Indie",] |> 
+  ggplot(aes(x=Year, y=`n()`))+
+  geom_line(color = "#065535")+
+  labs(title = "Indie")+
+  ylab("Number of games")+
+  xlim(2000,2023)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot2 <- Games_each_year[Games_each_year$Genre == "Action",] |> 
+  ggplot(aes(x=Year, y=`n()`))+
+  geom_line(color = "#0000ff")+
+  labs(title = "Action")+
+  ylab("Number of games")+
+  xlim(2000,2023)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot3 <- Games_each_year[Games_each_year$Genre == "Simulation",] |> 
+  ggplot(aes(x=Year, y=`n()`))+
+  geom_line(color = "#008080")+
+  labs(title = "Simulation")+
+  ylab("Number of games")+
+  xlim(2000,2023)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot4 <- Games_each_year[Games_each_year$Genre == "Strategy",] |> 
+  ggplot(aes(x=Year, y=`n()`))+
+  geom_line(color = "#40e0d0")+
+  labs(title = "Strategy")+
+  ylab("Number of games")+
+  xlim(2000,2023)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot5 <- Games_each_year[Games_each_year$Genre == "RPG",] |> 
+  ggplot(aes(x=Year, y=`n()`))+
+  geom_line(color = "#66cdaa")+
+  labs(title = "RPG")+
+  ylab("Number of games")+
+  xlim(2000,2023)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot6 <- Games_each_year[Games_each_year$Genre == "Sports",] |> 
+  ggplot(aes(x=Year, y=`n()`))+
+  geom_line(color = "#008000")+
+  labs(title = "Sports")+
+  ylab("Number of games")+
+  xlim(2000,2023)+
+  theme(plot.title = element_text(hjust = 0.5))
+
+main_title <- textGrob("Liczba wydanych gier w latach 1990-2023 w poszczególnych gatunkach\n",
+                       gp = gpar(fontsize = 15, fontface = "bold"))
+
+
+grid.arrange(plot1,plot2,plot3,plot4,plot5,plot6, ncol = 3, top = main_title)
+```
+
+Okazuje się że liczba wydawanych gier zaczęła rosnąć w tym samym czasie i w bardzo podobnym tempie dla każdego z gatunków.
+
+```{r, warning=FALSE, message=FALSE}
+Polish$`Release date` <- Polish$`Release date` |> 
+  str_extract("^[0-9]+") |> 
+  as.numeric()
+
+polish_games <- Polish |> 
+  arrange(`Release date`) |> 
+  filter(`Release date` >= 2003) |> 
+  group_by(`Release date`) |> 
+  summarize(n=n()) |> 
+  na.omit() |> 
+  ggplot(aes(x=`Release date`,y=n, color = "red"))+
+  geom_point()+
+  xlim(2003,2023)+
+  labs(title = "Liczba gier z polskim wsparciem językowym")+
+  theme_light()+
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45,vjust=0.5))+
+  xlab("Rok wydania")+
+  ylab("Liczba gier")+
+  scale_x_continuous(breaks = seq(2003,2023,by=1))
+  
+
+polish_games
+```
+
+**Ciekawostka**: Gier z polskim wsparciem językowym jest `r length(unique(Polish$Game))`, co stanowi `r round(length(unique(Polish$Game))/length(unique(Games_joined$Game)),2)`% wszystkich dostępnych gier na steam. Gier z polskim wsparciem językowym również powstaje coraz więcej.
+
+### Ocena gier
+
+Czym tak właściwie jest metascore? Metascore to średnia ważona ocen recenzji, która jest obliczana przez serwis Metacritic. Skala Metascore wynosi od 0 do 100, gdzie wyższy wynik oznacza lepszą ocenę.
+
+Czy istnieje gatunek gier który jest oceniany lepiej niż inne?
+
+```{r, fig.align='center'}
+Ocena_gatunki <- Games[!is.na(Games$Metascore),] |>  
+  group_by(Genre) |>  
+  ggplot(aes(x=Genre, y=Metascore, fill = Genre))+
+  geom_boxplot()+
+  theme_bw()+
+  labs(title = "Ocena gier dla każdego gatunku")+
+  ylab("Metascore")+
+  xlab("")+
+  theme(plot.title = element_text(hjust=0.5, face = "bold"))
+  
+Ocena_gatunki
+```
+
+```{r}
+# nie ma różnic
+Ocena_gatunki_violin <- Games[!is.na(Games$Metascore),] |>  
+  group_by(Genre) |>  
+  ggplot(aes(x= Genre,y=Metascore, fill = Genre))+
+  geom_violin()+
+  theme_bw()+
+  labs(title = "Ocena graczy dla każdego z gatunków")+
+  ylab("Metascore")+
+  theme(plot.title = element_text(hjust=0.5, face = "bold"))
+```
+
+```{r}
+ocena_gatunki_tabela <- Games[!is.na(Games$Metascore),] |> 
+  group_by(Genre) |> 
+  summarize(Ocena = mean(Metascore, na.rm = T), Minimum = min(Metascore, na.rm = T), Maksimum = max(Metascore, na.rm = T)) |>  
+  gt() |> 
+  tab_header(title = md("Ocena dla każdego z gatunków")) |> 
+  cols_label(Genre = md("**Gatunek**"), Ocena = md("**Średnia ocena**"),Maksimum = md("**Maksymalna ocena**"),Minimum = md("**Minimalna ocena**"))
+  
+
+ocena_gatunki_tabela
+```
+
+Dla każdego z gatunków metascore oscyluje na bardzo podobnym poziomie i wynosi średnio `r round(mean(Games$Metascore, na.rm = T),2)`% Oznacza to, że ludzie maja różne preferencje i nie istnieje gatunek gier który jest wyraźnie lepszy od innych.
+
+Czy z czasem deweloperzy robili coraz lepsze gry?
+
+```{r}
+historia_ocen <- Games_joined[!is.na(Games_joined$Metascore),] |> 
+  filter(Year>=2003, Year<= 2023) |> 
+  group_by(Year) |> 
+  summarize(m = mean(Metascore)) |> 
+  ggplot(aes(x=Year,y=m, fill = m))+
+  geom_col()+
+  ylab("Metascore")+
+  xlab("")+
+  coord_cartesian(ylim = c(60, 85))+
+  scale_x_continuous(breaks=seq(2003, 2023, 2))+
+  theme_classic()+
+  labs(title = "Średnia ocena gier w latach 2003-2023")+
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")+
+  scale_fill_continuous(low = "#aeb8f8", high="#7686ef")
+  
+historia_ocen
+```
+
+Średnia ocena gier nie była jednakowa na przestrzeni lat. W latach 2006 - 2013 jakość gier malała, ale po 2013 roku zaczęła rosnąć i osiągnęła największą wartość w 2023 roku. Widać, że deweloperzy starają się tworzyć coraz lepsze gry, aby spełniać oczekiwania graczy.
+
+### Cena gier
+
+```{r}
+cena_gatunki <- Games |> 
+  group_by(Genre) |> 
+  summarize(avg = mean(Price,na.rm = T), 
+            max = max(Price, na.rm = T), 
+            min = min(Price, na.rm = T), 
+            q25 = quantile(Price,probs = 0.25, na.rm = T),
+            q75 = quantile(Price,probs = 0.75, na.rm = T)) |> 
+  gt() |> 
+  data_color(columns = avg, palette = c("#3aa40c","#39731b","#1e5800"), domain = c(5,10)) |> 
+  tab_header(title = md("Cena gier w podziale na gatunki")) |> 
+  fmt_currency(columns = c(avg, max, min, q25, q75), currency = "USD") |> 
+  cols_label(Genre = md("**Gatunek**"),
+             avg = md("**Średnia cena**"), 
+             max = md("**Maksymalna cena**"), 
+             min = md("**Minimalna cena**"),
+             q25 = md("**Pierwszy kwartyl**"),
+             q75 = md("**Trzeci kwartyl**"))
+  
+cena_gatunki
+```
+
+Okazuje się, że najmniejszą średnią cenę mają gry z gatunku akcji, natomiast najdroższe są symulatoryi gry RPG.
+
+Jakie gry były najdroższe? Z czego to wynika?
+
+```{r}
+most_expensive_games <- Games_joined |> 
+  arrange(-Price) |> 
+  select(Game, Price, Genre, Developer, Year) |> 
+  head(10) |> 
+  gt() |> 
+  tab_options(table.background.color = "#5b5b5b") |> 
+  cols_label(Game = md("***Game***"),
+             Price = md("***Price***"),
+             Genre = md("***Genre***"),
+             Developer = md("***Developer***"),
+             Year = md("***Year***")) |> 
+  data_color(columns = Price,
+             rows = Price >= 999,
+             palette = "red",
+             apply_to = "text")
+most_expensive_games
+```
+
+Gdy zobaczymy na nowo wydane tytuły, ich cena żadko przekracza 80\$. A więc skąd pojawiły się tu gry za 200\$ a nawet 900\$? Takie gry są anomaliami, które nie powinny się znaleźć na steam. Jednak niektórzy delweloperzy wstawiają gry w takiej cenie w ramach testu, a może nawet próby oszustwa. Jedna z nich ma nawet w nazwie gry "DO NOT BUY". Jedyne przypadki kiedy gra może kosztować blisko 200\$ jest wtedy, gdy są dołączone do niej specjelne dodatki (DLC). Takie przypadki oczywiście też występują.
+
+Podzieliłem gry na 6 przedziałów cenowych:
+
+-   darmowe
+
+-   bardzo tanie: poniżej 5\$
+
+-   tanie: pomiędzy 5-10\$
+
+-   średnie: pomiędzy 10-50\$
+
+-   drogie: pomiędzy 50-80\$
+
+-   bardzo drogie: powyżej 80\$
+
+Ich rozkład ilościowy wygląda następująco:
+
+```{r}
+# podział cen na levele
+price_levels <- Games_joined[!is.na(Games_joined$Price),]
+
+price_levels$Price <- price_levels$Price |> 
+  cut(breaks = c(0,0.00001,5,10,50,80,1000),
+      labels = c("darmowa","bardzo tania","tania","srednia","droga","bardzo droga"),
+      include.lowest = T)
+
+price_freq <- plyr::count(price_levels$Price)
+
+price_levels_plot <- price_freq |> 
+  ggplot(aes(x=x, y = freq, fill = freq))+
+  geom_col()+
+  ylab("Liczba gier")+
+  xlab("")+
+  scale_fill_gradient(low = "#3aa40c",high = "#1e5800")+
+  theme_bw()+
+  labs(title = "Liczba gier w poszczególnych przedziałach cenowych")+
+  theme(legend.position = "none", plot.title = element_text(hjust=0.5))
+price_levels_plot
+```
+
+Najwięcej gier znajduje się w przedziale 0-5\$ , jest to aż `r round(price_freq$freq[2]/sum(price_freq$freq)*100,2)`% wszystkich gier.
+
+Gry darmowe stanowią `r round(price_freq$freq[1]/sum(price_freq$freq)*100,2)`% wszytkich gier, natomiast gry drogie i bardzo drogie zaledwie `r round((price_freq$freq[5]+price_freq$freq[6])/sum(price_freq$freq)*100,2)`% wszystkich gier.
+
+```{r}
+# owners/cena
+owners_price <- Games_joined[(!is.na(Games_joined$Price) & !is.na(Games_joined$Owners)),]
+
+owners_price$Price <- owners_price$Price |> 
+  cut(breaks = c(0,0.00001,5,10,50,80,1000),
+      labels = c("darmowa","bardzo tania","tania","średnia","droga","bardzo droga"),
+      include.lowest = T)
+
+owners_price_plot <- owners_price |> 
+  group_by(Price) |> 
+  summarize(o = mean(Owners)) |> 
+  ggplot(aes(x=Price,y=o,fill = o))+
+  geom_col()+
+  theme_bw()+
+  labs(title = "Liczba posiadanych kopii gier z każdego przedziału cenowego")+
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")+
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE))+
+  xlab("")+
+  ylab("Liczba kopii")+
+  scale_fill_gradient(low = "#e27272",high = "#7e60ba")
+  
+owners_price_plot
+```
+
+Pomimo tego, że gry z przedziału cenowego 50-80\$ stanowią jedynie 0.45% wszystkich gier, posiada je najwięcej osób. Takie zjawisko może wynikać z jakości gier w tym przedziale cenowym. Przeanalizujmy jak wygląda metascore dla każdego przedziału cenowego.
+
+```{r}
+# metascore / price
+price_metascore <- Games_joined[(!is.na(Games_joined$Price) & !is.na(Games_joined$Metascore)),]
+
+price_metascore$Price <- price_metascore$Price |> 
+  cut(breaks = c(0,0.00001,5,10,50,80,1000),
+      labels = c("darmowa","bardzo tania","tania","średnia","droga","bardzo droga"),
+      include.lowest = T)
+
+price_metascore_plot <- price_metascore |> 
+  group_by(Price) |> 
+  summarize(m = mean(Metascore)) |> 
+  ggplot(aes(x=Price,y=m, fill = m))+
+  geom_col()+
+  coord_cartesian(ylim = c(60, 85))+
+  labs(title = "Ocena gier w zależności od przedziału cenowego")+
+  xlab("Cena")+
+  ylab("Metascore")+
+  theme_light()+
+  theme(plot.title = element_text(hjust=0.5),
+        legend.position = "none")+
+  scale_fill_continuous(high = "#825fe9", low = "#dfd1ff")
+  
+price_metascore_plot
+```
+
+Faktycznie okazuje się, że drogie gry mają wyższy średni metascore. Cena gry zależy w istotnym stopniu od jakości jej wykonania. Na stworzenie dobrej, dobrze wyglądającej gry potrzeba więcej czasu a przez to i pieniędzy, więc musi kosztować więcej, żeby jej sprzedaż była opłacalna. Jak widać, opłaca się robić dobre gry, bo to one cieszą się największą popularnością. Ciekawym faktem jest również to, że dry darmowe mają zauważalnie wyższą ocenę od bardzo tanich. Pomimo tego że różnica cenowa jest niewielka, jeżeli komuś nie spodoba się gra za którą zapłacił to oceni ją gorzej, niż grę którą mógł przetestować bez ryzyka utraty jakiejkolwiek ilości pieniędzy.
+
+### Tagi
+
+```{r, message=FALSE}
+Tags2 <- read_csv2("data/tags2.csv")
+Tags2 <- Tags2[-9]
+Tags2 <- Tags2[-1]
+Tags2 <- Tags2[-7]
+```
+
+Tagi na platformie Steam stanowią kluczowy element kategoryzacji i wyszukiwania gier, umożliwiając użytkownikom łatwiejsze odnajdywanie tytułów zgodnych z ich zainteresowaniami. Deweloperzy dodają różnorodne tagi do swoich gier, opisujące m.in. gatunek, styl graficzny, tematykę czy funkcje rozgrywki. Każda gra ma od 5 do 20 tagów. Również użytkownicy mają możliwość dodania tagów do gier w swojej bibliotece. Tagi sprzyjają temu, że gra zostanie zarekomendowana właściwym użytkownikom, którzy będą chetni ją kupić. Kolejność tagów również ma znaczenie. Tagom przypisywanym na początku nadawana jest większa waga, czyli muszą jak najlepiej opisywać tematykę gry.
+
+```{r}
+popular_tags <- Tags2 |> 
+  arrange(-`Games with this tag`) |> 
+  select(Tag,`Games with this tag`,`Votes for this tag`,`Tag weight`) |> 
+  head(6) |> 
+  gt() |> 
+  tab_header(title = md("Najbardziej popularne tagi")) |> 
+  data_color(columns = `Games with this tag`, palette = c("#bec6f9","#8492f1"), domain = c(1800,5153)) |> 
+  cols_label(Tag = md("**Tag**"),
+             `Games with this tag` = md("**Ilość gier z tym tagiem**"), 
+             `Votes for this tag` = md("**Ilość głosów na ten tag**"), 
+             `Tag weight` = md("**Waga tagu**"))
+
+
+popular_tags
+```
+
+Najbardziej popularne taki takie jak Indie, Action, Adventure nie są zbyt dobre ponieważ są zbyt ogólne. Tagi te są tak popularne, że dodawanie do gier ich nie wniesie zbyt dużo do rekomendacji. Nie znaczy to, że nie powinno się ich dodawać, ale, że powinny pojawić się dopiero na końcu listy.
+
+```{r}
+# tagi z największą wagą
+tag_weight <- Tags2 |> 
+  arrange(-`Tag weight`) |> 
+  select(Tag,`Tag weight`,`Games with this tag`,`Votes for this tag`) |> 
+  head(8) |> 
+  gt() |> 
+  tab_header(title = md("Tagi z największą wagą")) |> 
+  data_color(columns = `Tag weight`, palette = c("#bec6f9","#9ba7f3"), domain = c(320,470)) |> 
+  cols_label(Tag = md("**Tag**"),
+             `Games with this tag` = md("**Ilość gier z tym tagiem**"), 
+             `Votes for this tag` = md("**Ilość głosów na ten tag**"), 
+             `Tag weight` = md("**Waga tagu**"))
+  
+
+tag_weight
+```
+
+Wysoka waga tagu oznacza, że dany tag jest silnie związany z charakterystyką danego tytułu i odzwierciedla kluczowe elementy rozgrywki, gatunek, tematykę czy inne istotne cechy. Dlatego deweloperzy starają się precyzyjnie wybierać tagi, które najlepiej opisują ich grę, ponieważ odpowiednie tagowanie może zwiększyć widoczność i atrakcyjność danego tytułu na rynku gier cyfrowych.
+
+```{r}
+tag_price <- Tags2 |> 
+  select(Tag,`Tag weight`,`Price (median)`,`Userscore (median)`) |> 
+  arrange(desc(`Price (median)`))
+
+```
+
+### Deweloperzy
+
+```{r message=FALSE, warning=FALSE}
+# loading all data frames
+d_2k <- read_csv2("data/dev_2k.csv")
+d_activision <- read_csv2("data/dev_activision.csv")
+d_ea <- read_csv2("data/dev_ea.csv")
+d_bethesda <- read_csv2("data/dev_bethesda.csv")
+d_klei <- read_csv2("data/dev_klei.csv")
+d_paradox <- read_csv2("data/dev_paradox.csv")
+d_sega <- read_csv2("data/dev_sega.csv")
+d_ubisoft <- read_csv2("data/dev_ubisoft.csv")
+d_valve <- read_csv2("data/dev_valve.csv")
+d_warner <- read_csv2("data/dev_warner.csv")
+```
+
+```{r}
+top_devs <- data.frame()
+
+dev_list <- list(d_2k,d_activision,d_ea,d_bethesda,d_klei,d_paradox,d_sega,d_ubisoft,d_valve,d_warner)
+
+Company <- c("2K","Activision","EA","Bethesda","Klei","Paradox","SEGA","Ubisoft","Valve","Warner")
+avg_price <- c()
+avg_metascore <- c()
+avg_owners <- c()
+number_of_games <- c()
+
+for(i in 1:10){
+  a <- as.data.frame(dev_list[i])
+  number_of_games[i] <- nrow(a)
+  avg_price[i] <- mean(a$Price, na.rm = T)
+  avg_metascore[i] <- mean(a$Metascore, na.rm = T)
+  avg_owners[i] <- mean(a$Owners, na.rm = T)
+}
+
+top_devs <- tibble(Company,number_of_games,avg_price,avg_metascore,avg_owners)
+top_devs$avg_owners <- round(top_devs$avg_owners)
+top_devs$avg_metascore  <- round(top_devs$avg_metascore)
+top_devs$avg_price <- round(top_devs$avg_price,2)
+```
+
+```{r}
+Devs <- na.omit(Devs)
+```
+
+Z informacji o `r nrow(Devs)` deweloperach wynika, że średnia liczba stworzonych gier na dewelopera wynosi `r mean(Devs$Developed_games)`. Oznacza to, że musi być wiele deweloperów którzy nie wyprodukowali żadanej gry.
+
+```{r}
+developed_games_hist2 <- Devs |> 
+  ggplot(aes(x=Developed_games, ))+
+  geom_histogram(bins = 62,fill = "darkgreen")+
+  xlab("Stworzone gry")+
+  ylab("Ilość")+
+  theme_light()+
+  labs(title = "Rozkład ilości wyprodukowanych gier przez deweloperów")+
+  theme(plot.title = element_text(hjust=0.5))
+  
+
+developed_games_hist2
+```
+
+Deweloperów którzy nie wyprodukowali żadnej gry jest aż `r nrow(Devs[Devs$Developed_games == 0,])`. Deweloperów którzy wyprodukowali więcej niż 5 gier jest `r nrow(Devs[Devs$Developed_games > 5,])`. Stanowią oni `r  round(nrow(Devs[Devs$Developed_games > 5,])/nrow(Devs)*100,2)`% wszystkich deweloperów. Widać, że jest bardzo dużo deweloperów którzy nie stworzyli ani jednej gry.
+
+```{r}
+#Zobaczmy jacy deweloperzy stworzyli najwięcej gier.
+highest_developed <- Devs |> 
+  arrange(-Developed_games) |> 
+  head(10) |> 
+  mutate(avg_owners = (Avg_owners1+Avg_owners2)/2) |> 
+  select(Company, Developed_games, avg_owners)
+
+# highest_developed |> 
+#   gt() |> 
+#   cols_label(Company = md("***Company***"),
+#              Developed_games = md("***Stworzone gry***"),
+#              avg_owners = md("***Średnia liczba posiadaczy***"))
+
+
+#Pomimo tego, że ci deweloperzy stowrzyli bardzo dużo gier, nie cieszą się one dużą popularnością.
+```
+
+Zobaczmy jak wyglądają statystyki największych deweloperów.
+
+```{r}
+top_devs_table <- top_devs |> 
+  arrange(-avg_owners) |> 
+  mutate(income = avg_price*avg_owners) |> 
+  gt() |> 
+  data_color(columns = avg_owners, palette = c("#d9ead3","#a2c4c9","#6fa8dc",	"#3d85c6","#0b5394"), domain = c(740000,24000000)) |> 
+  data_color(columns = income, palette = c("#851900"),
+             rows = income > 200000000) |> 
+  data_color(columns = income,
+             rows = income < 200000000,
+             palette = c("#ffb8b8","#ff9398","#ff738d",	"#ff3b7c","#dd306b")) |> 
+  data_color(columns = c(number_of_games),
+             rows = number_of_games == min(top_devs$number_of_games),
+             palette = "#4bff4b",
+             apply_to = "text") |> 
+  data_color(columns = c(avg_price),
+             rows = avg_price == min(top_devs$avg_price),
+             palette = "#4bff4b",
+             apply_to = "text") |> 
+  tab_header(title = md("Wybrani najwięksi deweloperzy")) |> 
+  fmt_currency(columns = c(avg_price,income), currency = "USD") |> 
+  cols_label(Company = md("**Nazwa**"),
+             number_of_games = md("**Liczba gier**"), 
+             avg_price = md("**Średnia cena**"), 
+             avg_metascore = md("**Średni metascore**"),
+             avg_owners = md("**Liczba właścicieli**"),
+             income = md("**Przychód**")) |> 
+  tab_footnote(footnote = md("Przychód został obliczony za pomocą szacowanej ilości właścieli gry - wartość mocno przybliżona"),
+               locations = cells_column_labels(columns = income))
+
+top_devs_table
+```
+
+Valve wyróżnia się największą liczbą właścicieli gier spośród wymienionych deweloperów, z liczbą przekraczającą 235 milionów. Valve ma również najwyższy średni metascore co sugeruje, że ich gry są nie tylko popularne, ale także wysoko oceniane pod względem jakości. Pomimo tego, że nie stworzyli oni najwięcej gier, posiadają największy szacowany przychód. Klei stworzyło najmiej gier, ale przystępne ceny oraz pozytywne oceny przyciągają dużo użytkowników co pozwala osiągnąć wysoki przychód. Dowodzi to, że jakość jest ważniejsza od ilości.
+
+Bethesda ma najwyższą średnią cenę gier (24.38\$), przy czym posiadają wiele pozytywnych ocen, co pozwala na osiągnięcie dużego przychodu.
+
+```{r}
+dev_num <- top_devs |> 
+  arrange(-avg_owners) |> 
+  mutate(income = avg_price*avg_owners) |> 
+  select(-Company)
+names(dev_num) <- c("Ilość gier","Cena","Metascore","Właściciele","Przychód")
+corr2 <- cor_mat(dev_num)
+p_mat2 <- cor_pmat(dev_num)
+
+dev_corr <- ggcorrplot(corr2, p.mat = p_mat2,lab = T)+
+  labs(title = "Macierz korelacji")+
+  theme(plot.title = element_text(hjust = 0.5))
+dev_corr
+```
+
+Można zauważyć, że nie ma silnej korelacji między liczbą gier a średnim metascorem lub średnią ceną, co sugeruje, że większa liczba gier niekoniecznie przekłada się na wyższą jakość lub cenę. Widać natomist silną korelację między średnią oceną, a liczbą graczy. Oznacza to, że im lepsza gra, tym więcej osób będzie chciało ją mieć.
+
+SEGA, mimo że ma największą liczbę gier (207), nie ma najwyższego metascore ani nie jest liderem w żadnej innej kategorii, co może wskazywać na różnorodność ich portfolio gier pod względem cen i ocen.
+
+Klei, mając tylko 12 gier, ma stosunkowo wysoką średnią cenę (14.74\$) i metascore (81), co sugeruje, że kładą oni większy nacisk na jakość niż na ilość.
+
+Popularność dewelopera (mierzona liczbą właścicieli) i jakość gier (oceniana przez metascore) nie są bezpośrednio powiązane z ilością wydanych tytułów. Deweloperzy tacy jak Valve wyróżniają się na tle innych, oferując gry, które są wysoko oceniane, podczas gdy inni, tacy jak SEGA, mają dużą liczbę gier, ale niekoniecznie przekłada się to na równie duże uznanie lub liczbę użytkowników.
+
+
+
+## Podsumowanie
+
+Rynek gier komputerowych stanowi dynamiczny sektor rozrywkowy, stale ewoluujący i przyciągający mnóstwo graczy na całym świecie. Warto zauważyć, że rozwój technologii, szczególnie w dziedzinie grafiki i interaktywności, wpływa na coraz większą popularność gier komputerowych. Tworzenie gier o wysokiej jakości jest kluczowym elementem przyciągającym uwagę konsumentów. Dobrej jakości gry nie tylko zapewniają użytkownikom satysfakcję z rozgrywki, ale także potrafią zbudować lojalność wśród społeczności graczy. Połączenie optymalnej ilości gier z wysoką jakością oraz przystępną ceną dają najlepsze rezultaty. Dla deweloperów istotne jest także zrozumienie oczekiwań i preferencji graczy, co pozwala dostosować się do zmieniających się trendów i utrzymać konkurencyjność na rynku. Dbałość o szczegóły oraz tworzenie gier, które dostarczają niezapomniane doświadczenia, to kluczowe czynniki przyczyniające się do powodzenia na współczesnym rynku gier komputerowych. Warto obserwować ten rynek i czekać na to co przyniesie w przyszłości.

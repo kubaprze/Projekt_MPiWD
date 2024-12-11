@@ -1,0 +1,220 @@
+---
+title: "Projekt_mpwid"
+author: "Jakub Przemski"
+format: html
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readr)
+library(anytime)
+```
+
+```{r, message=FALSE}
+
+
+games <- c("action_games.csv","indie_games.csv","mmo_games.csv","rpg_games.csv","simulation_games.csv","sports_games.csv","strategy_games.csv")
+game_name <- c("Action","Indie","MMO","RPG","Simulation","Sports","Strategy")
+
+
+
+#Joining all games into one dataframe
+Games <- data.frame()
+
+for(i in 1:7){
+  
+  table <- read_csv2(games[i])
+  
+  #adding genre column
+  Genre <- rep(game_name[i],times = nrow(table))
+  table <- cbind(table,Genre)
+  
+  # dropping index row
+  table <- table[-1]
+  
+  #changing names
+  colnames(table) <- c("Game","Year","Price($)","Metascore(%)","Owners","avg_playtime","Developer(s)","Publisher(s)","Genre")
+  
+  # extracting year
+  table$Year <- table$Year %>% 
+    str_extract("[0-9]+$") %>% 
+    as.integer()
+  
+  #extracting price
+  table$`Price($)` <- table$`Price($)` %>% 
+    str_replace("Free","0") %>% 
+    str_extract("[0-9]+.*([0-9]+)*") %>% 
+    as.numeric()
+
+  
+  #extracting metascore
+  table$`Metascore(%)` <- table$`Metascore(%)` %>% 
+    str_extract("[0-9]+%\\)") %>% 
+    str_extract("[0-9]+") %>% 
+    as.integer()
+  
+  # calculating average estimated game owners
+  min_owners <-  table$Owners %>% 
+    str_extract("^[0-9]+(,*[0-9]+)*(,*[0-9]+)*") %>% 
+    str_remove_all("\\,") %>% 
+    as.integer()
+  max_owners <- table$Owners %>% 
+    str_extract("[0-9]+(,*[0-9]+)*(,*[0-9]+)*$") %>% 
+    str_remove_all("\\,") %>% 
+    as.integer()
+  table$Owners <- rowMeans(cbind(min_owners, max_owners))
+  
+  # extracting playtime (in hours)
+  table$avg_playtime <- table$avg_playtime %>% 
+    str_extract("[0-9]+:[0-9]+")
+    
+  
+  
+  Games <- rbind(Games, table)
+}
+
+#write_csv2(Games, "all_games_cleaned.csv")
+```
+
+
+```{r message=FALSE}
+games_by_month <- read_csv2("games_by_month.csv")
+games_by_year <- read_csv2("games_by_year.csv")
+games_by_year$`Average price` <- games_by_year$`Average price` %>% 
+  str_remove("\\$") %>% 
+  as.numeric()
+games_by_year$`Median price` <- games_by_year$`Median price` %>% 
+  str_remove("\\$") %>% 
+  as.numeric()
+
+games_by_month <- games_by_month[!str_detect(games_by_month$Month,"All"),]
+games_by_month <- games_by_month[-1,]
+games_by_month$Month <- anytime(paste0("01 ",games_by_month$Month))
+games_by_month$`Average price` <- games_by_month$`Average price` %>% 
+  str_remove("\\$") %>% 
+  as.numeric()
+games_by_month$`Median price` <- games_by_month$`Median price` %>% 
+  str_remove("\\$") %>% 
+  as.numeric()
+
+
+#write_csv2(games_by_month, "games_by_month.csv")
+#write_csv2(games_by_year, "games_by_year.csv")
+```
+
+```{r}
+devs <- read_csv2("devs.csv")
+
+
+
+min_owners4 <-  devs$`Avg owners...4` %>% 
+    str_extract("^[0-9]+(,*[0-9]+)*(,*[0-9]+)*") %>% 
+    str_remove_all("\\,") %>% 
+    as.integer()
+max_owners4 <- devs$`Avg owners...4` %>% 
+  str_extract("[0-9]+(,*[0-9]+)*(,*[0-9]+)*$") %>% 
+  str_remove_all("\\,") %>% 
+  as.integer()
+devs$`Avg owners...4` <- rowMeans(cbind(min_owners4, max_owners4))
+
+min_owners6 <-  devs$`Avg owners...6` %>% 
+    str_extract("^[0-9]+(,*[0-9]+)*(,*[0-9]+)*") %>% 
+    str_remove_all("\\,") %>% 
+    as.integer()
+max_owners6 <- devs$`Avg owners...6` %>% 
+  str_extract("[0-9]+(,*[0-9]+)*(,*[0-9]+)*$") %>% 
+  str_remove_all("\\,") %>% 
+  as.integer()
+devs$`Avg owners...6` <- rowMeans(cbind(min_owners6, max_owners6))
+
+#write_csv2(devs, "devs.csv")
+```
+
+
+```{r}
+polish <- read_csv2("polish.csv")
+
+polish <- polish[-1]
+polish <- polish[-6]
+
+polish$`Release date` <- anytime(polish$`Release date`)
+
+polish$`Score rank(Userscore / Metascore)` <- polish$`Score rank(Userscore / Metascore)` %>% 
+    str_extract("[0-9]+%\\)") %>% 
+    str_extract("[0-9]+") %>% 
+    as.integer()
+
+polish$Price <- polish$Price %>% 
+  str_extract("[0-9]+.*([0-9]+)*") %>% 
+  as.numeric()
+
+min_ownersp <-  polish$Owners %>% 
+    str_extract("^[0-9]+(,*[0-9]+)*(,*[0-9]+)*") %>% 
+    str_remove_all("\\,") %>% 
+    as.integer()
+max_ownersp <- polish$Owners %>% 
+  str_extract("[0-9]+(,*[0-9]+)*(,*[0-9]+)*$") %>% 
+  str_remove_all("\\,") %>% 
+  as.integer()
+polish$Owners <- rowMeans(cbind(min_ownersp, max_ownersp))
+
+#write_csv2(polish, "polish.csv")
+```
+
+
+```{r}
+tags <- read_csv2("tags.csv")
+
+tags <- tags[-1]
+tags <- tags[-8]
+tags <- tags[-7]
+tags$`Price (median)` <- tags$`Price (median)` %>% 
+  str_extract("[0-9]+.*([0-9]+)*") %>% 
+  as.numeric()
+tags$`Userscore (median)` <- tags$`Userscore (median)` %>% 
+  str_remove("%") %>% 
+  as.numeric()
+
+#write_csv2(tags,"tags.csv")
+```
+
+------------------------------------------------------
+```{r}
+Games <- read_csv2("all_games_cleaned.csv")
+Games <- Games[!is.na(Games$Game),]
+
+length(Games$Game)
+length(unique(Games$Game))
+
+Games_joined <- data.frame()
+Games_joined <- rbind(Games_joined,Games[1,])
+
+
+for(i in 2:length(Games$Game)){
+  if(Games$Game[i] %in% Games_joined$Game){
+    Games_joined[Games_joined$Game==Games$Game[i],]$Genre <- paste0(Games_joined[Games_joined$Game==Games$Game[i],]$Genre,", ",Games$Genre[i])
+  }else{
+    Games_joined <- rbind(Games_joined, Games[i,])
+  }
+}
+
+write_csv2(Games_joined, "Games_joined.csv")
+
+Games_joined[Games_joined$Game==Games$Game[i],]$Genre <- paste0(Games_joined[Games_joined$Game==Games$Game[i],]$Genre,", ",Games$Genre[i])
+```
+
+
+
+
+
+```{r}
+(Games$Genre[34000])
+```
+
+
+
+
+
+
+
+
